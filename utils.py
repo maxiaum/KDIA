@@ -51,7 +51,7 @@ def load_cinic10_data(datadir):
     transform = transforms.Compose([transforms.ToTensor()])
     
     cinic10_train_ds = CINIC10_truncated(datadir+'cinic-10/'+'train', train=True, transform=transform)
-    cinic10_test_ds = CINIC10_truncated(datadir+'cinic-10/'+'valid', train=False, transform=transform)
+    cinic10_test_ds = CINIC10_truncated(datadir+'cinic-10/'+'test', train=False, transform=transform)
     
     X_train, y_train = np.array([s[0] for s in cinic10_train_ds.samples]), np.array([int(s[1]) for s in cinic10_train_ds.samples])
     X_test, y_test = np.array([s[0] for s in cinic10_test_ds.samples]), np.array([int(s[1]) for s in cinic10_test_ds.samples])
@@ -226,7 +226,7 @@ def compute_accuracy(model, dataloader, get_confusion_matrix=False, device="cpu"
                     #print("target:",target)
                     if device != 'cpu':
                         x, target = x.to(device), target.to(dtype=torch.int64).to(device)
-                    if algo == 'mine':
+                    if algo == 'kdia':
                         _, _, out = model['ec'](x, withgen=False)
                     else:
                         _, _, out = model(x)
@@ -252,7 +252,7 @@ def compute_accuracy(model, dataloader, get_confusion_matrix=False, device="cpu"
                 #print("x:",x)
                 if device != 'cpu':
                     x, target = x.to(device), target.to(dtype=torch.int64).to(device)
-                if algo == 'mine':
+                if algo == 'kdia':
                     _, _, out = model['ec'](x, withgen=False)
                 else:
                     _, _, out = model(x)
@@ -393,7 +393,7 @@ def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None, noise_lev
             test_ds = dl_obj(datadir, train=False, transform=transform_test, download=True)
         elif dataset == 'cinic10':
             train_ds = dl_obj(datadir+'cinic-10/'+'train/', dataidxs=dataidxs, train=True, transform=transform_train)
-            test_ds = dl_obj(datadir+'cinic-10/'+'valid/', train=False, transform=transform_test)
+            test_ds = dl_obj(datadir+'cinic-10/'+'test/', train=False, transform=transform_test)
 
         train_dl = data.DataLoader(dataset=train_ds, batch_size=train_bs, drop_last=drop_, shuffle=True)
         test_dl = data.DataLoader(dataset=test_ds, batch_size=test_bs, shuffle=False)
@@ -418,3 +418,36 @@ def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None, noise_lev
 
 
     return train_dl, test_dl, train_ds, test_ds
+
+def compute_sim(h_feat, g_feat, h_labels, g_labels):
+    similarity_results = {}
+    common_labels = set(h_labels.tolist()) & set(g_labels.tolist())
+    
+    for label in common_labels:
+        # 获取真实数据和生成数据中当前标签的样本索引
+        real_idx = (h_labels == label).nonzero().squeeze()
+        gen_idx = (g_labels == label).nonzero().squeeze()
+        
+        # 提取对应特征
+        real_f = h_feat[real_idx]  # shape: [N_real, C, H, W]
+        gen_f = g_feat[gen_idx]     # shape: [N_gen, C, H, W]
+        
+        # 计算相似性（按通道平均后计算余弦相似度）
+        # print(real_f.shape)
+        # print(gen_f.shape)
+        # print("$$"*10)
+        real_f = real_f.mean(dim=2) if real_f.dim() == 3 else real_f.mean(dim=[2,3]) # 空间维度平均，得到[N_real, C]
+            
+        gen_f = gen_f.mean(dim=2) if gen_f.dim() == 3 else gen_f.mean(dim=[2,3])   # [N_gen, C]
+        # print(real_f.shape)
+        # print(gen_f.shape)
+        # 归一化
+        real_f = F.normalize(real_f, p=2, dim=1)
+        gen_f = F.normalize(gen_f, p=2, dim=1)
+        
+        # 计算相似矩阵并取平均'
+        if real_f.shape[1] == gen_f.shape[1]:
+            sim_matrix = torch.mm(real_f, gen_f.t())  # [N_real, N_gen]
+            similarity_results[label] = sim_matrix.mean().item()
+    
+    return similarity_results

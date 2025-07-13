@@ -18,22 +18,37 @@ from disco import *
 
 def get_args():
     parser = argparse.ArgumentParser()
+    # fedavgm
+    parser.add_argument('--server_momentum', type=float, default=0, help='the server momentum (FedAvgM)')
+    
+    # fedgkd
+    parser.add_argument('--gkd', type=int, default=0, help='w/o or w fedgkd')
+    
+    # feddisco 
     parser.add_argument('--measure_difference', type=str, default='kl', help='how to measure difference. e.g. only_iid, cosine')
-    parser.add_argument('--gkd', type=int, default=0, help='')
     parser.add_argument('--disco', type=int, default=0, help='w/o or w feddisco')
     parser.add_argument('--disco_a', type=float, default=0.5, help='')
     parser.add_argument('--disco_b', type=float, default=0.1, help='')
-    parser.add_argument('--remark', type=str, default='base', help='')
+    
+    # fedcog
+    parser.add_argument('--lambda_dis', type=float, default=0.1, help='')
+    
+    # kdia
+    parser.add_argument('--lambda_gen', type=float, default=0.1, help='')
     parser.add_argument('--noise_dim', type=int, default=100, help=' ')
+    parser.add_argument('--noise_std', type=float, default=1, help='')
     parser.add_argument('--feature_num', type=int, default=16, help=' ')
-    parser.add_argument('--num_classes', type=int, default=10, help=' ')
     parser.add_argument('--gen_bs', type=int, default=64, help='the training batch size of generator')
     parser.add_argument('--global_gen_epoch', type=int, default=20, help=' ')
     parser.add_argument('--global_iter_per_epoch', type=int, default=100, help='')
     parser.add_argument('--gen_lr', type=float, default=1e-3, help='')
-    parser.add_argument('--noise_std', type=float, default=1, help='')
+    parser.add_argument('--temper', type=float, default=2.0, help='the temperature parameter for kd')
+    
+    # common config
+    parser.add_argument('--remark', type=str, default='base', help='')
+    parser.add_argument('--num_classes', type=int, default=10, help=' ')
     parser.add_argument('--alpha', type=float, default=0.5, help='')
-    parser.add_argument('--algorithm', type=str, default='fedavg', choices={'fedavg','fedprox','fedcurv','moon','mine'}, help=' ')
+    parser.add_argument('--alg', type=str, default='fedavg', choices={'fedavg','fedprox', 'moon', 'fedcog', 'kdia'}, help=' ')
     parser.add_argument('--gpu', type=int, default=0, help='GPU to use')
     parser.add_argument('--model', type=str, default='resnet50', help='neural network used in training')
     parser.add_argument('--dataset', type=str, default='cifar100', help='dataset used for training')
@@ -43,8 +58,6 @@ def get_args():
     parser.add_argument('--lr', type=float, default=0.1, help='learning rate (default: 0.1)')
     parser.add_argument('--epochs', type=int, default=5, help='number of local epochs')
     parser.add_argument('--n_parties', type=int, default=2, help='number of workers in a distributed cluster')
-    parser.add_argument('--alg', type=str, default='fedavg',
-                        help='communication strategy: fedavg/fedprox')
     parser.add_argument('--comm_round', type=int, default=50, help='number of maximum communication roun')
     parser.add_argument('--init_seed', type=int, default=0, help="Random seed")
     parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
@@ -57,10 +70,11 @@ def get_args():
     parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
     parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
     parser.add_argument('--optimizer', type=str, default='sgd', help='the optimizer')
-    parser.add_argument('--mu', type=float, default=5, help='the mu parameter for fedprox or moon')
+    parser.add_argument('--mu', type=float, default=5, help='the mu parameter for fedprox, moon, and fedgkd')
+    parser.add_argument('--lambda_kd', type=float, default=0.5, help='the lambda_kd parameter for fedcog and kdia')
     parser.add_argument('--out_dim', type=int, default=256, help='the output dimension for the projection layer')
     parser.add_argument('--temperature', type=float, default=0.5, help='the temperature parameter for contrastive loss')
-    parser.add_argument('--temper', type=float, default=2.0, help='')
+    
     parser.add_argument('--local_max_epoch', type=int, default=100,
                         help='the number of epoch for local optimal training')
     parser.add_argument('--model_buffer_size', type=int, default=1,
@@ -76,8 +90,7 @@ def get_args():
     parser.add_argument('--loss', type=str, default='contrastive')
     parser.add_argument('--save_model', type=int, default=0)
     parser.add_argument('--use_project_head', type=int, default=1)
-    parser.add_argument('--server_momentum', type=float, default=0, help='the server momentum (FedAvgM)')
-    parser.add_argument('--step', type=int, default=3, help='')
+    # parser.add_argument('--step', type=int, default=3, help='')
     args = parser.parse_args()
     return args
 
@@ -103,7 +116,7 @@ def init_nets(net_configs, n_parties, args, device='cpu'):
         input_channel = 3
     if args.resnet_model:
         for net_i in range(n_parties):
-            if args.alg == 'mine':
+            if args.alg == 'kdia':
                 net = nn.ModuleDict()
                 net['ec'] = ResNet18_imagenet(input_dim=512, hidden_dims=[400,400,256], output_dim=n_classes)
                 net['gen'] = Generator(args.noise_dim, args.feature_num, n_classes)
@@ -117,7 +130,7 @@ def init_nets(net_configs, n_parties, args, device='cpu'):
             nets[net_i] = net
     else:
         for net_i in range(n_parties):
-            if args.alg == 'mine':
+            if args.alg == 'kdia':
                 net = nn.ModuleDict()
                 # net = ModelFedCon(args.model, args.out_dim, n_classes, net_configs)
                 net['ec'] = ModelFedMine(input_channel=input_channel, input_dim=400, hidden_dims=[120, 84, 84, 256], output_dim=n_classes)
@@ -179,8 +192,6 @@ def fedavging(weight_buffer, freqs):
     return w
 
 def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, args_optimizer, args, t_net=None, round=None, device="cpu"):
-    # if len(args.gpu.split(',')) > 1:
-    #     net = nn.DataParallel(net, device_ids=[0, 1])
     
     net.to(device)
     if t_net is None or round < 5:
@@ -189,13 +200,6 @@ def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, args_o
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
-
-    # train_acc, _ = compute_accuracy(net, train_dataloader, device=device, algo='fedavg')
-
-    # test_acc, conf_matrix, _ = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device, algo='fedavg')
-
-    # logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    # logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
 
     if args_optimizer == 'adam':
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
@@ -253,21 +257,10 @@ def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, args_o
 
 def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu, args,
                       device="cpu"):
-    # global_net.to(device)
-    # if len(args.gpu.split(',')) > 1:
-    #     net = nn.DataParallel(net, device_ids=[0, 1])
     net.to(device)
-    # else:
-    #     net.to(device)
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
-
-    # train_acc, _ = compute_accuracy(net, train_dataloader, device=device, algo='fedprox')
-    # test_acc, conf_matrix, _ = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device, algo='fedprox')
-
-    # logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    # logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
 
     if args_optimizer == 'adam':
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
@@ -322,18 +315,22 @@ def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader
     return test_acc
 
 
-def train_net_fedmine(net_id, net, t_net, train_dataloader, test_dataloader, round, lr, args_optimizer, mu,
+def train_net_kdia(net_id, net, t_net, train_dataloader, test_dataloader, round, lr, args_optimizer, mu,
                       args,
                       device="cpu"):
     epochs, rounds = args.epochs, args.comm_round
-    # global_net.to(device)
-    # if len(args.gpu.split(',')) > 1:
-    #     net = nn.DataParallel(net, device_ids=[0,1])
     net.to(device)
+    test_net = copy.deepcopy(net)
     frozen_net(net, ['ec'], frozen=False)
     frozen_net(net, ['gen'], frozen=True)
     frozen_net(t_net, ['ec'], frozen=True)
-
+    frozen_net(test_net, ['ec'], frozen=True)
+    
+    model_path = './models/fedavg/globalmodel_avg_iid_base.pth'
+    checkpoint = torch.load(model_path)
+    # print(checkpoint.keys())
+    test_net['ec'].load_state_dict(checkpoint)
+    
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
@@ -350,6 +347,8 @@ def train_net_fedmine(net_id, net, t_net, train_dataloader, test_dataloader, rou
 
     criterion = nn.CrossEntropyLoss().to(device)
     kl_div = nn.KLDivLoss(reduction='batchmean').to(device)
+    
+    similarites = {0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[], 7:[], 8:[], 9:[]}
 
     N = 0
     eps = 1e-4
@@ -357,7 +356,8 @@ def train_net_fedmine(net_id, net, t_net, train_dataloader, test_dataloader, rou
  
     for batch_idx, (x, target) in enumerate(train_dataloader):
         N += x.size(0)
-            
+        
+    # CG adjustment method (3)    
     M = N
     if N <= args.batch_size:
         N = N * epochs
@@ -386,6 +386,8 @@ def train_net_fedmine(net_id, net, t_net, train_dataloader, test_dataloader, rou
 
             _, _, output = net['ec'](x, withgen=False)
             sharpen = F.softmax(output / args.temper, dim=1)
+            if epoch == 0:
+                real_feat, _, _ = test_net['ec'](x, withgen=False)
             
             with torch.no_grad():
                 _, _, t_output = t_net['ec'](x, withgen=False)
@@ -399,11 +401,16 @@ def train_net_fedmine(net_id, net, t_net, train_dataloader, test_dataloader, rou
             gc = net['gen'](z, y).detach()
             _, _, output_ = net['ec'](gc, withgen=True)
             
+            # compute similarity
+            if epoch == 0:
+                sims = compute_sim(real_feat, gc, target, y)
+                for label, sim in sims.items():
+                    similarites[label].append(sim)
+            
             loss = criterion(output, target)
-            reg_loss = args.mu * kl_div(soft_target, sharpen)
-            gen_loss = 1.0 * criterion(output_, y)
+            reg_loss = args.lambda_kd * kl_div(soft_target, sharpen)
+            gen_loss = args.lambda_gen * criterion(output_, y)
 
-            # for fedmine
             loss += (reg_loss + gen_loss)
 
             loss.backward()
@@ -415,32 +422,23 @@ def train_net_fedmine(net_id, net, t_net, train_dataloader, test_dataloader, rou
         logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
     frozen_net(net, ['ec'], frozen=True)
     
-    # train_acc, _ = compute_accuracy(net, train_dataloader, device=device, algo='mine')
-    test_acc, conf_matrix, _ = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device, algo='mine')
-
+    # train_acc, _ = compute_accuracy(net, train_dataloader, device=device, algo='kdia')
+    test_acc, conf_matrix, _ = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device, algo='kdia')
+    sims_avg = {key: sum(value) / len(value) if value else 0 for key, value in similarites.items()}
     # logger.info('>> Training accuracy: %f' % train_acc)
     logger.info('>> Test accuracy: %f' % test_acc)
     net.to('cpu')
     logger.info(' ** Training complete **')
-    return test_acc
+    return test_acc, sims_avg
 
 
 def train_net_fedcon(net_id, net, global_net, previous_nets, train_dataloader, test_dataloader, epochs, lr,
                      args_optimizer, mu, temperature, args,
                      round, device="cpu"):
-    # if len(args.gpu.split(',')) > 1:
-    #     net = nn.DataParallel(net, device_ids=[0, 1])
     net.to(device)
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
-
-    # train_acc, _ = compute_accuracy(net, train_dataloader, device=device, algo='moon')
-
-    # test_acc, conf_matrix, _ = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device, algo='moon')
-
-    # logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    # logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
 
     if args_optimizer == 'adam':
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
@@ -636,9 +634,10 @@ def local_train_net(nets, args, net_dataidx_map, train_dl=None, test_dl=None, gl
         elif args.alg == 'local_training':
             testacc = train_net(net_id, net, train_dl_local, test_dl, n_epoch, args.lr, args.optimizer, args,
                                           device=device)
-        elif args.alg == 'mine':
-            testacc = train_net_fedmine(net_id, net, teacher_model, train_dl_local, test_dl, round, args.lr,
+        elif args.alg == 'kdia':
+            testacc, sims = train_net_kdia(net_id, net, teacher_model, train_dl_local, test_dl, round, args.lr,
                                                   args.optimizer, args.mu, args, device=device)
+            logger.info("round:{} similarity list:{}".format(round, sims))
         elif args.alg == 'scaffold':
             testacc, c_delta_para, net_delta_para = train_net_scaffold(net_id, net, global_model, c_local[net_id], c_global, train_dl_local, test_dl, n_epoch, args.lr, 
                                                   args.optimizer, args, device=device)
@@ -699,7 +698,7 @@ if __name__ == '__main__':
     logging.basicConfig(
         filename=os.path.join(args.logdir, log_path),
         format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%m-%d %H:%M', level=logging.DEBUG, filemode='w')
+        datefmt='%m-%d %H:%M:%S', level=logging.DEBUG, filemode='w')
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -755,7 +754,7 @@ if __name__ == '__main__':
         n_comm_rounds -= args.load_model_round
     # print(global_model.device)
     if args.server_momentum != 0:
-        if args.alg == 'mine':
+        if args.alg == 'kdia':
             moment_v = copy.deepcopy(global_model['ec'].state_dict())
         else:
             moment_v = copy.deepcopy(global_model.state_dict())
@@ -1019,7 +1018,7 @@ if __name__ == '__main__':
 
         torch.save(nets[0].state_dict(), args.modeldir + 'all_in/' + args.log_file_name + '.pth')
 
-    elif args.alg == 'mine':
+    elif args.alg == 'kdia':
         t_net = copy.deepcopy(global_model.to(device))
         criterion = nn.CrossEntropyLoss().to(device)
         all_nets = copy.deepcopy(nets)
@@ -1140,14 +1139,14 @@ if __name__ == '__main__':
             logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
             
-            # train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device, algo='mine')
-            test_acc, conf_matrix, _ = compute_accuracy(global_model, test_dl, get_confusion_matrix=True, device=device, algo='mine')
-            tnet_test_acc, _, _ = compute_accuracy(t_net, test_dl, get_confusion_matrix=True, device=device, algo='mine')
+            # train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device, algo='kdia')
+            test_acc, conf_matrix, _ = compute_accuracy(global_model, test_dl, get_confusion_matrix=True, device=device, algo='kdia')
+            tnet_test_acc, _, _ = compute_accuracy(t_net, test_dl, get_confusion_matrix=True, device=device, algo='kdia')
 
             # logger.info('>> Global Model Train accuracy: %f' % train_acc)
             logger.info('>> Global Model Test accuracy: %f' % test_acc)
             # logger.info('>> Global Model Train loss: %f' % train_loss)
             logger.info('>> Teacher Model Test accuracy: %f' % tnet_test_acc)
-            mkdirs(args.modeldir + 'fedmine/')
+            mkdirs(args.modeldir + 'kdia/')
             global_model.to('cpu')
-            torch.save(global_model.state_dict(), args.modeldir + 'fedmine/' + args.log_file_name + '.pth')
+            torch.save(global_model.state_dict(), args.modeldir + 'kdia/' + args.log_file_name + '.pth')

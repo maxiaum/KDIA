@@ -737,12 +737,12 @@ class ModelFedMine(nn.Module):
         
     def forward(self, x, withgen=False):
         if withgen:
-            x, z, y = self.represents(x)
+            f, z, y = self.represents(x)
         else:
-            x = self.features(x)
-            x, z, y = self.represents(x)
+            f = self.features(x)
+            x, z, y = self.represents(f)
         
-        return x, z, y
+        return f, z, y
     
 class ResNet18_imagenet(nn.Module):
     '''
