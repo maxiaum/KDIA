@@ -1,6 +1,6 @@
-Tackling Data Heterogeneity in Federated Learning
+**Tackling Data Heterogeneity in Federated Learning
 through Knowledge Distillation with Inequitable
-Aggregation.
+Aggregation**
 
 ![intro](img_output/overview.jpg)
 
