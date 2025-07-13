@@ -24,7 +24,7 @@ python main.py --dataset=cifar10 --resnet_model=0 --alg=kdia --lambda_kd=0.5 \
 
 Key arguments:
 
-- `dataset`: the name of dataset. We support 'cifar10', 'cifar100' and 'cinic10'.
+- `dataset`: the name of dataset. We support 'cifar10', 'cifar100', and 'cinic10'.
 - `alg`: the name of algorithm. We support 'fedavg', 'fedprox', 'fedavgm', 'fedgkd', 'feddisco', 'scaffold', and 'kdia'.
 - `partition`: the data partitioning strategy, we support 'iid' and 'noniid'
 - `beta`: the parameter for the dirichlet distribution for data partitioning.
